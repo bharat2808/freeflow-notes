@@ -148,7 +148,7 @@ $(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupp
 	swift build --target MarkdownUIBridge --arch "$*" --disable-sandbox
 	@libtool -static -o "$@" $$(find ".build/$*-apple-macosx/debug" -type f -name '*.o' ! -path '*/MarkdownUIBridge.build/*' | LC_ALL=C sort)
 
-test: $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
+test: whisper-bridge-test $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
 	@mkdir -p "$(BUILD_DIR)"
 	swiftc \
 		-parse-as-library \
@@ -160,6 +160,12 @@ test: $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
 		$(TEST_PRODUCTION_SOURCES) $(WHISPER_BRIDGE_OBJECT) \
 		$(TEST_SOURCES) "$(MARKDOWNUI_ARCHIVE)"
 	@$(TEST_RUNNER)
+
+.PHONY: whisper-bridge-test
+whisper-bridge-test:
+	@mkdir -p "$(BUILD_DIR)"
+	clang -Wall -Wextra -Werror -ITests/WhisperBridgeFixtures Tests/WhisperBridgeTests.c -o "$(BUILD_DIR)/WhisperBridgeTests"
+	@"$(BUILD_DIR)/WhisperBridgeTests"
 
 ifeq ($(ARCH),universal)
 $(WHISPER_BRIDGE_OBJECT): $(BUILD_DIR)/WhisperBridge-arm64.o $(BUILD_DIR)/WhisperBridge-x86_64.o

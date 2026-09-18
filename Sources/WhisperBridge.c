@@ -19,6 +19,7 @@ typedef int (*ff_full_fn)(struct whisper_context *, struct whisper_full_params, 
 typedef int (*ff_segment_count_fn)(struct whisper_context *);
 typedef const char *(*ff_segment_text_fn)(struct whisper_context *, int);
 typedef void (*ff_free_fn)(struct whisper_context *);
+typedef void *(*ff_backend_by_type_fn)(int);
 
 static void *ff_open_library(void) {
     static const char *paths[] = {
@@ -41,6 +42,18 @@ static void *ff_symbol(void *library, const char *name) {
 void *ff_whisper_create(const char *model_path, const char *language) {
     void *library = ff_open_library();
     if (library == NULL) return NULL;
+
+    // Dynamic GGML builds may have no registered CPU backend. Whisper aborts
+    // (rather than returning an error) when initializing a model in that state.
+    // Return NULL to use the existing CLI fallback, which loads its own backends
+    // outside the app process. Do not load GPU backends on the shortcut thread.
+    ff_backend_by_type_fn backend_by_type =
+        (ff_backend_by_type_fn)ff_symbol(library, "ggml_backend_dev_by_type");
+    // GGML_BACKEND_DEVICE_TYPE_CPU is 0 in the dynamically loaded C API.
+    if (backend_by_type == NULL || backend_by_type(0) == NULL) {
+        dlclose(library);
+        return NULL;
+    }
 
     ff_init_fn init = (ff_init_fn)ff_symbol(library, "whisper_init_from_file_with_params");
     ff_context_params_fn context_params = (ff_context_params_fn)ff_symbol(library, "whisper_context_default_params");

@@ -68,6 +68,11 @@ enum LocalWhisperTranscriptionServiceTests {
                 let previewTranscript = try await service.transcribePCM16(pcm, sampleRate: 24_000)
                 TestSupport.expectEqual(previewTranscript, "hello from local whisper")
 
+                // The recorder emits 16 kHz PCM. This must still transcribe via
+                // the CLI when the in-process session is unavailable.
+                let recordingPreview = try await service.transcribePCM16(pcm)
+                TestSupport.expectEqual(recordingPreview, "hello from local whisper")
+
                 try await verifyPreviewContinuesAcrossChunks()
 
             } catch {
