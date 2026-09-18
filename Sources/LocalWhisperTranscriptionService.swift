@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import os.lock
 import os.log
@@ -202,76 +203,6 @@ enum LocalWhisperError: LocalizedError {
     }
 }
 
-@_silgen_name("ff_whisper_create")
-private func ffWhisperCreate(_ modelPath: UnsafePointer<CChar>, _ language: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer?
-
-@_silgen_name("ff_whisper_transcribe")
-private func ffWhisperTranscribe(
-    _ session: UnsafeMutableRawPointer,
-    _ samples: UnsafePointer<Float>,
-    _ sampleCount: Int32,
-    _ output: UnsafeMutablePointer<CChar>,
-    _ outputCapacity: Int
-) -> Int32
-
-@_silgen_name("ff_whisper_destroy")
-private func ffWhisperDestroy(_ session: UnsafeMutableRawPointer)
-
-private final class InProcessWhisperSession: @unchecked Sendable {
-    private let handle: UnsafeMutableRawPointer
-    private let lock = NSLock()
-
-    init?(modelPath: String, language: String?) {
-        var handle: UnsafeMutableRawPointer?
-        modelPath.withCString { modelCString in
-            if let language {
-                language.withCString { languageCString in
-                    handle = ffWhisperCreate(modelCString, languageCString)
-                }
-            } else {
-                handle = ffWhisperCreate(modelCString, nil)
-            }
-        }
-        guard let handle else { return nil }
-        self.handle = handle
-    }
-
-    deinit {
-        ffWhisperDestroy(handle)
-    }
-
-    func transcribe(pcm16: Data) throws -> String {
-        guard !pcm16.isEmpty else { throw LocalWhisperError.emptyTranscript }
-        var samples = [Float]()
-        samples.reserveCapacity(pcm16.count / MemoryLayout<Int16>.size)
-        pcm16.withUnsafeBytes { rawBuffer in
-            let values = rawBuffer.bindMemory(to: Int16.self)
-            samples.append(contentsOf: values.map { Float($0) / 32768.0 })
-        }
-        guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
-
-        return try lock.withLock {
-            var output = [CChar](repeating: 0, count: 64 * 1024)
-            let result = samples.withUnsafeBufferPointer { buffer in
-                output.withUnsafeMutableBufferPointer { outputBuffer in
-                    ffWhisperTranscribe(
-                        handle,
-                        buffer.baseAddress!,
-                        Int32(buffer.count),
-                        outputBuffer.baseAddress!,
-                        outputBuffer.count
-                    )
-                }
-            }
-            guard result >= 0 else { throw LocalWhisperError.processFailed(-1, "In-process Whisper failed.") }
-            let transcript = String(cString: output)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else { throw LocalWhisperError.emptyTranscript }
-            return transcript
-        }
-    }
-}
-
 final class LocalWhisperTranscriptionService: AudioTranscriber {
     private final class ProcessBox: @unchecked Sendable {
         private let lock = NSLock()
@@ -296,13 +227,16 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     private let modelURL: URL
     private let language: String?
     private let timeoutSeconds: TimeInterval
-    private let inProcessSession: InProcessWhisperSession?
+    private let helperConfiguration: PersistentWhisperWorker.Configuration?
+    private let worker: PersistentWhisperWorker
 
     init(
         executablePath: String,
         modelPath: String,
         language: String? = nil,
-        timeoutSeconds: TimeInterval = 120
+        timeoutSeconds: TimeInterval = 120,
+        helperExecutableURL: URL? = Bundle.main.url(forResource: "freeflow-whisper-worker", withExtension: nil),
+        worker: PersistentWhisperWorker = .shared
     ) throws {
         let executable = Self.resolvePath(executablePath)
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
@@ -317,12 +251,15 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         self.executableURL = executable
         self.modelURL = model
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
+        let resolvedLanguage = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
+        self.language = resolvedLanguage
         self.timeoutSeconds = max(1, timeoutSeconds)
-        self.inProcessSession = InProcessWhisperSession(
-            modelPath: model.path,
-            language: self.language
-        )
+        self.worker = worker
+        self.helperConfiguration = helperExecutableURL.map {
+            PersistentWhisperWorker.Configuration(
+                executableURL: $0, modelPath: model.path, language: resolvedLanguage
+            )
+        }
     }
 
     func transcribe(fileURL: URL) async throws -> String {
@@ -331,6 +268,18 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
             throw CocoaError(.fileNoSuchFile)
         }
 
+        if let helperConfiguration,
+           let samples = try Self.readRecordingSamples(fileURL) {
+            do {
+                return try await transcribeWithHelper(samples, configuration: helperConfiguration)
+            } catch PersistentWhisperWorker.WorkerError.unsupported {
+                // Headerless builds or unsupported local libraries retain CLI support.
+            }
+        }
+        return try await transcribeUsingCLI(fileURL: fileURL)
+    }
+
+    private func transcribeUsingCLI(fileURL: URL) async throws -> String {
         let processBox = ProcessBox()
         return try await withTaskCancellationHandler {
             try await withThrowingTaskGroup(of: String.self) { group in
@@ -361,14 +310,48 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     /// same 16 kHz mono PCM16 used by the saved recording.
     func transcribePCM16(_ samples: Data, sampleRate: Int = 16_000) async throws -> String {
         guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
-        if sampleRate == 16_000, let inProcessSession {
-            return try inProcessSession.transcribe(pcm16: samples)
+        if sampleRate == 16_000, let helperConfiguration {
+            let floats = samples.withUnsafeBytes { raw in
+                raw.bindMemory(to: Int16.self).map { Float(Int16(littleEndian: $0)) / 32768.0 }
+            }
+            do {
+                return try await transcribeWithHelper(floats, configuration: helperConfiguration)
+            } catch PersistentWhisperWorker.WorkerError.unsupported {
+                // Preserve custom/unsupported installations via the configured CLI.
+            }
         }
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("freeflow-whisper-preview-\(UUID().uuidString).wav")
         try Self.makeWAVData(pcm16: samples, sampleRate: sampleRate).write(to: temporaryURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        return try await transcribe(fileURL: temporaryURL)
+        return try await transcribeUsingCLI(fileURL: temporaryURL)
+    }
+
+    private func transcribeWithHelper(
+        _ samples: [Float], configuration: PersistentWhisperWorker.Configuration
+    ) async throws -> String {
+        let result = try await worker.transcribe(
+            samples: samples, configuration: configuration, timeout: timeoutSeconds
+        )
+        guard !result.isEmpty else { throw LocalWhisperError.emptyTranscript }
+        return result
+    }
+
+    /// The recorder and chunker produce mono 16 kHz WAVs. Other audio formats
+    /// continue through the CLI's existing decoding path.
+    private static func readRecordingSamples(_ url: URL) throws -> [Float]? {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let format = file.processingFormat
+        guard format.sampleRate == 16_000, format.channelCount == 1,
+              file.length > 0, file.length <= 16_000 * 300 else { return nil }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else {
+            throw PersistentWhisperWorker.WorkerError.invalidAudio
+        }
+        try file.read(into: buffer)
+        guard let samples = buffer.floatChannelData?[0] else {
+            throw PersistentWhisperWorker.WorkerError.invalidAudio
+        }
+        return Array(UnsafeBufferPointer(start: samples, count: Int(buffer.frameLength)))
     }
 
     func makeLivePreviewSession(

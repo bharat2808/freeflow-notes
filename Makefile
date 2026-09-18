@@ -12,8 +12,12 @@ APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
+WHISPER_HEADERS = $(wildcard Vendor/whisper-1.8.6/*.h)
 WHISPER_BRIDGE_OBJECT = $(BUILD_DIR)/WhisperBridge.o
+WHISPER_WORKER = $(RESOURCES)/freeflow-whisper-worker
+WHISPER_WORKER_TARGET := $(subst $(space),\ ,$(CONTENTS)/Resources/freeflow-whisper-worker)
 TEST_PRODUCTION_SOURCES = \
+	Sources/PersistentWhisperWorker.swift \
 	Sources/MarkdownNoteStore.swift \
 	Sources/MarkdownTableEditor.swift \
 	Sources/LocalWhisperTranscriptionService.swift \
@@ -63,7 +67,7 @@ endif
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES) Info.plist $(ICON_ICNS) $(CONNECTOR_RESOURCES_BINARY_TARGET)
+$(APP_EXECUTABLE_TARGET): $(SOURCES) $(MARKDOWNUI_REQUIRED_ARCHIVES) Info.plist $(ICON_ICNS) $(CONNECTOR_RESOURCES_BINARY_TARGET) $(WHISPER_WORKER_TARGET) WhisperWorker.entitlements
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 		swiftc \
@@ -79,7 +83,7 @@ ifeq ($(ARCH),universal)
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target x86_64-apple-macosx13.0 \
 		-I ".build/x86_64-apple-macosx/debug/Modules" \
-		$(SOURCES) $(WHISPER_BRIDGE_OBJECT) "$(BUILD_DIR)/libMarkdownUI-x86_64.a"
+		$(SOURCES) "$(BUILD_DIR)/libMarkdownUI-x86_64.a"
 	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
 		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		"$(MACOS_DIR)/$(APP_NAME)-x86_64"
@@ -91,7 +95,7 @@ else
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
 		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
-		$(SOURCES) $(WHISPER_BRIDGE_OBJECT) "$(MARKDOWNUI_ARCHIVE)"
+		$(SOURCES) "$(MARKDOWNUI_ARCHIVE)"
 endif
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
@@ -100,11 +104,20 @@ endif
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/AppIcon.icns"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$(CONNECTOR_RESOURCES_BINARY)"
+	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements WhisperWorker.entitlements "$(WHISPER_WORKER)"
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
+
+$(WHISPER_WORKER_TARGET): Helpers/WhisperWorker.c $(WHISPER_BRIDGE_OBJECT)
+	@mkdir -p "$(RESOURCES)"
+ifeq ($(ARCH),universal)
+	clang -O2 -mmacosx-version-min=13.0 -arch arm64 -arch x86_64 Helpers/WhisperWorker.c $(WHISPER_BRIDGE_OBJECT) -o "$@"
+else
+	clang -O2 -mmacosx-version-min=13.0 -arch $(ARCH) Helpers/WhisperWorker.c $(WHISPER_BRIDGE_OBJECT) -o "$@"
+endif
 
 $(CONNECTOR_RESOURCES_BINARY_TARGET): $(CONNECTOR_PACKAGE_SOURCES)
 	@mkdir -p "$(RESOURCES)"
@@ -148,7 +161,7 @@ $(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupp
 	swift build --target MarkdownUIBridge --arch "$*" --disable-sandbox
 	@libtool -static -o "$@" $$(find ".build/$*-apple-macosx/debug" -type f -name '*.o' ! -path '*/MarkdownUIBridge.build/*' | LC_ALL=C sort)
 
-test: whisper-bridge-test $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
+test: whisper-bridge-test whisper-worker-fixture $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
 	@mkdir -p "$(BUILD_DIR)"
 	swiftc \
 		-parse-as-library \
@@ -157,9 +170,14 @@ test: whisper-bridge-test $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVE
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
 		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
-		$(TEST_PRODUCTION_SOURCES) $(WHISPER_BRIDGE_OBJECT) \
+		$(TEST_PRODUCTION_SOURCES) \
 		$(TEST_SOURCES) "$(MARKDOWNUI_ARCHIVE)"
 	@$(TEST_RUNNER)
+
+.PHONY: whisper-worker-fixture
+whisper-worker-fixture:
+	@mkdir -p "$(BUILD_DIR)"
+	clang -Wall -Wextra -Werror Tests/WhisperWorkerFixture.c -o "$(BUILD_DIR)/WhisperWorkerFixture"
 
 .PHONY: whisper-bridge-test
 whisper-bridge-test:
@@ -171,21 +189,21 @@ ifeq ($(ARCH),universal)
 $(WHISPER_BRIDGE_OBJECT): $(BUILD_DIR)/WhisperBridge-arm64.o $(BUILD_DIR)/WhisperBridge-x86_64.o
 	lipo -create -output "$@" $^
 
-$(BUILD_DIR)/WhisperBridge-arm64.o: Sources/WhisperBridge.c
+$(BUILD_DIR)/WhisperBridge-arm64.o: Sources/WhisperBridge.c $(WHISPER_HEADERS)
 	@mkdir -p "$(BUILD_DIR)"
-	clang -c "$<" -o "$@" -I/opt/homebrew/include -O2 -mmacosx-version-min=13.0 -arch arm64
+	clang -c "$<" -o "$@" -IVendor/whisper-1.8.6 -O2 -mmacosx-version-min=13.0 -arch arm64
 
-$(BUILD_DIR)/WhisperBridge-x86_64.o: Sources/WhisperBridge.c
+$(BUILD_DIR)/WhisperBridge-x86_64.o: Sources/WhisperBridge.c $(WHISPER_HEADERS)
 	@mkdir -p "$(BUILD_DIR)"
-	clang -c "$<" -o "$@" -I/opt/homebrew/include -O2 -mmacosx-version-min=13.0 -arch x86_64
+	clang -c "$<" -o "$@" -IVendor/whisper-1.8.6 -O2 -mmacosx-version-min=13.0 -arch x86_64
 else
-$(WHISPER_BRIDGE_OBJECT): Sources/WhisperBridge.c
+$(WHISPER_BRIDGE_OBJECT): Sources/WhisperBridge.c $(WHISPER_HEADERS)
 	@mkdir -p "$(BUILD_DIR)"
-	clang -c "$<" -o "$@" -I/opt/homebrew/include -O2 -mmacosx-version-min=13.0 -arch $(ARCH)
+	clang -c "$<" -o "$@" -IVendor/whisper-1.8.6 -O2 -mmacosx-version-min=13.0 -arch $(ARCH)
 endif
 
 validate:
-	plutil -lint Info.plist FreeFlow.entitlements
+	plutil -lint Info.plist FreeFlow.entitlements WhisperWorker.entitlements
 	swiftc -typecheck Scripts/generate-compilation-database.swift
 	@ruby -rjson -e 'ARGV.each { |file| JSON.parse(File.read(file)) }' .sourcekit-lsp/config.json
 	@set -e; for script in $(SHELL_SCRIPTS); do bash -n "$$script"; done

@@ -39,9 +39,23 @@ static void *ff_symbol(void *library, const char *name) {
     return dlsym(library, name);
 }
 
-void *ff_whisper_create(const char *model_path, const char *language) {
+static void *ff_whisper_create_internal(const char *model_path, const char *language, int load_backends) {
     void *library = ff_open_library();
     if (library == NULL) return NULL;
+
+    // These structs are passed by value. Never mix a different runtime ABI
+    // with the pinned build-time headers; the configured CLI remains available.
+    const char *(*version)(void) = (const char *(*)(void))ff_symbol(library, "whisper_version");
+    if (version == NULL || strcmp(version(), "1.8.6") != 0) {
+        dlclose(library);
+        return NULL;
+    }
+
+    // Only the isolated helper opts in to native backend initialization.
+    if (load_backends) {
+        void (*load_all)(void) = (void (*)(void))ff_symbol(library, "ggml_backend_load_all");
+        if (load_all != NULL) load_all();
+    }
 
     // Dynamic GGML builds may have no registered CPU backend. Whisper aborts
     // (rather than returning an error) when initializing a model in that state.
@@ -82,6 +96,14 @@ void *ff_whisper_create(const char *model_path, const char *language) {
     return session;
 }
 
+void *ff_whisper_create(const char *model_path, const char *language) {
+    return ff_whisper_create_internal(model_path, language, 0);
+}
+
+void *ff_whisper_create_worker(const char *model_path, const char *language) {
+    return ff_whisper_create_internal(model_path, language, 1);
+}
+
 int ff_whisper_transcribe(void *opaque, const float *samples, int sample_count, char *output, size_t output_capacity) {
     if (opaque == NULL || samples == NULL || sample_count <= 0 || output == NULL || output_capacity == 0) return -1;
     ff_whisper_session *session = (ff_whisper_session *)opaque;
@@ -100,8 +122,9 @@ int ff_whisper_transcribe(void *opaque, const float *samples, int sample_count, 
     params.print_progress = false;
     params.print_realtime = false;
     params.print_timestamps = false;
-    params.language = session->language;
-    params.detect_language = session->language == NULL;
+    params.language = session->language != NULL ? session->language : "auto";
+    // detect_language=true is detection-only; auto language still transcribes.
+    params.detect_language = false;
 
     if (full(session->context, params, samples, sample_count) != 0) return -1;
 
@@ -134,6 +157,12 @@ void ff_whisper_destroy(void *opaque) {
 }
 
 #else
+
+void *ff_whisper_create_worker(const char *model_path, const char *language) {
+    (void)model_path;
+    (void)language;
+    return NULL;
+}
 
 void *ff_whisper_create(const char *model_path, const char *language) {
     (void)model_path;

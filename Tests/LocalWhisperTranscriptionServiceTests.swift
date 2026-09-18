@@ -55,7 +55,8 @@ enum LocalWhisperTranscriptionServiceTests {
                 let service = try LocalWhisperTranscriptionService(
                     executablePath: executable.path,
                     modelPath: model.path,
-                    timeoutSeconds: 5
+                    timeoutSeconds: 5,
+                    helperExecutableURL: nil
                 )
                 let transcript = try await service.transcribe(fileURL: audio)
                 TestSupport.expectEqual(transcript, "hello from local whisper")
@@ -73,6 +74,8 @@ enum LocalWhisperTranscriptionServiceTests {
                 let recordingPreview = try await service.transcribePCM16(pcm)
                 TestSupport.expectEqual(recordingPreview, "hello from local whisper")
 
+                try await verifyServicesShareWarmHelper(directory: directory, executable: executable, model: model)
+                try await PersistentWhisperWorkerTests.run()
                 try await verifyPreviewContinuesAcrossChunks()
 
             } catch {
@@ -83,6 +86,43 @@ enum LocalWhisperTranscriptionServiceTests {
 
         semaphore.wait()
         if let failure { fatalError("Local Whisper test failed: \(failure)") }
+    }
+
+    private static func verifyServicesShareWarmHelper(directory: URL, executable: URL, model: URL) async throws {
+        let helper = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("build/WhisperWorkerFixture")
+        let worker = PersistentWhisperWorker()
+        defer { worker.shutdown() }
+        let preview = try LocalWhisperTranscriptionService(
+            executablePath: executable.path, modelPath: model.path,
+            helperExecutableURL: helper, worker: worker
+        )
+        let pcm = Data(repeating: 0, count: 16_000 * 2)
+        let first = try await preview.transcribePCM16(pcm)
+        TestSupport.expectEqual(first, "synthetic-1")
+
+        let recording = directory.appendingPathComponent("synthetic-recording.wav")
+        try LocalWhisperTranscriptionService.makeWAVData(pcm16: pcm, sampleRate: 16_000).write(to: recording)
+        let final = try LocalWhisperTranscriptionService(
+            executablePath: executable.path, modelPath: model.path,
+            helperExecutableURL: helper, worker: worker
+        )
+        let second = try await final.transcribe(fileURL: recording)
+        TestSupport.expectEqual(second, "synthetic-2")
+        let nextRecording = try await preview.transcribePCM16(pcm)
+        TestSupport.expectEqual(nextRecording, "synthetic-3")
+
+        let unsupported = directory.appendingPathComponent("unsupported-model.bin")
+        try Data().write(to: unsupported)
+        let fallback = try LocalWhisperTranscriptionService(
+            executablePath: executable.path, modelPath: unsupported.path,
+            helperExecutableURL: helper, worker: worker
+        )
+        let fallbackPreview = try await fallback.transcribePCM16(pcm)
+        TestSupport.expectEqual(fallbackPreview, "hello from local whisper")
+        let fallbackFinal = try await fallback.transcribe(fileURL: recording)
+        TestSupport.expectEqual(fallbackFinal, "hello from local whisper")
+
     }
 
     private static func verifyPreviewContinuesAcrossChunks() async throws {

@@ -71,6 +71,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        PersistentWhisperWorker.shared.shutdown()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard appState.hasCompletedSetup else { return true }
         if !flag {
