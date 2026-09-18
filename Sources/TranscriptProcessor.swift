@@ -126,10 +126,26 @@ enum TranscriptProcessor {
                 customSystemPrompt: customSystemPrompt,
                 outputLanguage: outputLanguage
             )
-            return (result.transcript, .postProcessingSucceeded, result.prompt)
+            return resolveDictationResult(result, rawTranscript: trimmedRawTranscript)
         } catch {
             os_log(.error, log: transcriptProcessingLog, "Post-processing failed: %{public}@", error.localizedDescription)
             return (trimmedRawTranscript, .postProcessingFailedFallback, "")
         }
+    }
+
+    static func resolveDictationResult(
+        _ result: PostProcessingResult,
+        rawTranscript: String
+    ) -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
+        // Cleanup can sanitize an EMPTY sentinel or quoted blank to no text.
+        // Keep recognized speech available for paste and Copy Again in that case.
+        guard !result.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (
+                rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines),
+                .postProcessingFailedFallback,
+                result.prompt
+            )
+        }
+        return (result.transcript, .postProcessingSucceeded, result.prompt)
     }
 }

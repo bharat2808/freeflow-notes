@@ -13,6 +13,7 @@ struct FreeFlowTests {
         LLMCooldownManagerTests.run()
         TranscriptionErrorPresentationCoreTests.run()
         TranscriptTextCoreTests.run()
+        TranscriptProcessorTests.run()
         RecordingArtifactStoreTests.run()
         VoiceMacroMatcherTests.run()
         ClipboardControllerTests.run()

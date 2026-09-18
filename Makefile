@@ -17,6 +17,10 @@ WHISPER_BRIDGE_OBJECT = $(BUILD_DIR)/WhisperBridge.o
 WHISPER_WORKER = $(RESOURCES)/freeflow-whisper-worker
 WHISPER_WORKER_TARGET := $(subst $(space),\ ,$(CONTENTS)/Resources/freeflow-whisper-worker)
 TEST_PRODUCTION_SOURCES = \
+	Sources/AppStateTypes.swift \
+	Sources/PipelineHistoryItem.swift \
+	Sources/PostProcessingService.swift \
+	Sources/TranscriptProcessor.swift \
 	Sources/PersistentWhisperWorker.swift \
 	Sources/MarkdownNoteStore.swift \
 	Sources/MarkdownTableEditor.swift \
