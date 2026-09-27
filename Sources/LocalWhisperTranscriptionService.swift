@@ -489,6 +489,61 @@ private extension Data {
     }
 }
 
+/// Decides whether a provisional preview window is worth transcribing.
+///
+/// Microphone gain varies by orders of magnitude, so a fixed amplitude
+/// threshold can silently disable the live preview: a real low-gain recording
+/// measured its first 3 s window at rms 0.00701 with a peak of 0.0377 — just
+/// under the previous rms 0.008 / peak 0.04 constants — while the same audio
+/// transcribed without trouble at stop time. These floors only reject digital
+/// silence and pure room tone and sit far below speech captured at a low input
+/// gain (3 % of full scale measures rms 0.00346 / peak 0.0201).
+struct PreviewSpeechGate {
+    private let minimumRMS: Double
+    private let minimumPeak: Double
+    /// A window this many times quieter than the loudest window of this
+    /// recording is treated as a pause. Comparing against the recording's own
+    /// level keeps pause skipping useful on quiet microphones, where absolute
+    /// thresholds cannot separate speech from room tone.
+    private let dynamicRangeFactor: Double
+    private var loudestRMS = 0.0
+
+    init(
+        minimumRMS: Double = 0.001,
+        minimumPeak: Double = 0.0045,
+        dynamicRangeFactor: Double = 16
+    ) {
+        self.minimumRMS = minimumRMS
+        self.minimumPeak = minimumPeak
+        self.dynamicRangeFactor = dynamicRangeFactor
+    }
+
+    mutating func containsSpeech(rms: Double, peak: Double) -> Bool {
+        guard peak >= minimumPeak || rms >= minimumRMS else { return false }
+        let reference = loudestRMS
+        loudestRMS = max(loudestRMS, rms)
+        // The first window above the noise floors is taken at face value:
+        // nothing louder has been measured yet to compare it against.
+        guard reference > 0 else { return true }
+        return rms * dynamicRangeFactor >= reference
+    }
+
+    /// Walks every sample, so callers keep this off the audio callback and the
+    /// session state lock.
+    static func levels(of samples: Data) -> (rms: Double, peak: Double) {
+        let values = samples.withUnsafeBytes { $0.bindMemory(to: Int16.self) }
+        guard !values.isEmpty else { return (0, 0) }
+        var sumOfSquares = 0.0
+        var peak = 0.0
+        for value in values {
+            let normalized = abs(Double(value)) / 32_768.0
+            sumOfSquares += normalized * normalized
+            peak = max(peak, normalized)
+        }
+        return (sqrt(sumOfSquares / Double(values.count)), peak)
+    }
+}
+
 /// Incremental local Whisper preview used while a note is still recording.
 /// It deliberately treats each result as provisional: the complete recording
 /// is transcribed again after stop, so preview latency never changes the
@@ -506,10 +561,19 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     private var stopped = false
     private var workerRunning = false
     private var workerTask: Task<Void, Never>?
+    private var speechGate = PreviewSpeechGate()
 
     private let sampleRate = 16_000
     private let chunkFrames = 16_000 * 3
     private let maxBufferedFrames = 16_000 * 20
+    /// How much *new* audio a rejected window waits for before the next
+    /// attempt. Retrying on every microphone callback would re-walk the whole
+    /// window far too often.
+    private let rejectedWindowRetryFrames = 16_000
+
+    private var chunkBytes: Int {
+        chunkFrames * MemoryLayout<Int16>.size
+    }
 
     init(
         transcribe: @escaping @Sendable (Data, Int) async throws -> String,
@@ -525,7 +589,6 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             guard !stopped else { return false }
             audio.append(samples)
             pendingPreviewBytes += samples.count
-            let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
             guard !workerRunning, pendingPreviewBytes >= chunkBytes else { return false }
             workerRunning = true
             return true
@@ -552,7 +615,6 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
 
     private func nextPreviewSnapshotLocked() -> PreviewSnapshot? {
         let bytesPerFrame = MemoryLayout<Int16>.size
-        let chunkBytes = chunkFrames * bytesPerFrame
         guard pendingPreviewBytes >= chunkBytes, audio.count >= chunkBytes else { return nil }
         pendingPreviewBytes = 0
         let maxBytes = maxBufferedFrames * bytesPerFrame
@@ -562,6 +624,16 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             audio = Data(audio.suffix(maxBytes))
         }
         return PreviewSnapshot(audio: audio)
+    }
+
+    /// Re-counts most of a chunk that the speech gate rejected, so the next
+    /// attempt needs only `rejectedWindowRetryFrames` of new audio.
+    private func rearmAfterSilentWindow() {
+        stateLock.withLock {
+            guard !stopped else { return }
+            let retryBytes = rejectedWindowRetryFrames * MemoryLayout<Int16>.size
+            pendingPreviewBytes = max(0, chunkBytes - retryBytes)
+        }
     }
 
     private func drainAudio() async {
@@ -575,10 +647,21 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             }
 
             guard let snapshot else {
-                stateLock.withLock {
+                let hasPendingChunk: Bool = stateLock.withLock {
+                    guard !stopped else {
+                        workerRunning = false
+                        workerTask = nil
+                        return false
+                    }
+                    // Audio that filled the chunk while this iteration looked
+                    // away still needs transcribing; simply exiting would leave
+                    // it waiting for a microphone callback that may never come.
+                    guard pendingPreviewBytes < chunkBytes else { return true }
                     workerRunning = false
                     workerTask = nil
+                    return false
                 }
+                if hasPendingChunk { continue }
                 return
             }
             await process(snapshot)
@@ -592,11 +675,17 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
 
     private func process(_ snapshot: PreviewSnapshot) async {
         let startedAt = CFAbsoluteTimeGetCurrent()
+        // Level analysis stays off the state lock: it walks up to 20 s of
+        // samples and must not stall the microphone callback.
+        let levels = PreviewSpeechGate.levels(of: snapshot.audio)
+        let containsSpeech = stateLock.withLock {
+            speechGate.containsSpeech(rms: levels.rms, peak: levels.peak)
+        }
         do {
             // Avoid invoking Whisper for clearly silent chunks.  This keeps
             // long recordings inexpensive while preserving the recorder's
             // complete audio for final transcription.
-            if containsSpeech(snapshot.audio) {
+            if containsSpeech {
                 let transcript = try await transcribe(snapshot.audio, sampleRate)
                 try Task.checkCancellation()
                 let preview = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -613,6 +702,21 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
                         (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
                     )
                 }
+            } else {
+                // The audio stays in the rolling buffer, so retry after a short
+                // slice of new audio instead of forfeiting the whole chunk:
+                // clearing it made a recording that opened quietly wait another
+                // full chunk for its next chance, and a short note produced no
+                // preview text at all.
+                rearmAfterSilentWindow()
+                os_log(
+                    .info,
+                    log: localWhisperLog,
+                    "preview skipped silent window rms=%.5f peak=%.4f elapsed=%.0fms",
+                    levels.rms,
+                    levels.peak,
+                    (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                )
             }
         } catch is CancellationError {
             // Recording cancellation is expected and should not surface as an error.
@@ -627,19 +731,5 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
                 error.localizedDescription
             )
         }
-    }
-
-    private func containsSpeech(_ samples: Data) -> Bool {
-        let values = samples.withUnsafeBytes { $0.bindMemory(to: Int16.self) }
-        guard !values.isEmpty else { return false }
-        var sumOfSquares = 0.0
-        var peak = 0.0
-        for value in values {
-            let normalized = abs(Double(value)) / 32768.0
-            sumOfSquares += normalized * normalized
-            peak = max(peak, normalized)
-        }
-        let rms = sqrt(sumOfSquares / Double(values.count))
-        return rms >= 0.008 || peak >= 0.04
     }
 }
