@@ -13,7 +13,9 @@ This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATC
 ### Added
 
 - Markdown voice notes that can be created, searched, organized into folders, appended to, and updated by voice.
-- Optional local Whisper transcription for speech processed on the Mac.
+- Optional on-device Whisper transcription with a persistent helper and more reliable previews for quiet recordings.
+- PDF export with attachment handling, and an editor for Markdown tables.
+- A bundled Model Context Protocol connector for compatible local AI clients to search and manage notes.
 - A standalone FreeFlow Notes app identity and update feed.
 
 ## [1.2.1] - 2026-08-11
