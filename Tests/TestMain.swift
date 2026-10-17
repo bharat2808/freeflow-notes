@@ -4,6 +4,7 @@ import Foundation
 struct FreeFlowTests {
     static func main() {
         MarkdownNoteStoreTests.run()
+        MarkdownTableEditorTests.run()
         LocalWhisperTranscriptionServiceTests.run()
         AppContextServiceTests.run()
         ModelConfigurationTests.run()
@@ -12,6 +13,10 @@ struct FreeFlowTests {
         LLMCooldownManagerTests.run()
         TranscriptionErrorPresentationCoreTests.run()
         TranscriptTextCoreTests.run()
+        TranscriptProcessorTests.run()
+        RecordingArtifactStoreTests.run()
+        VoiceMacroMatcherTests.run()
+        ClipboardControllerTests.run()
         print("FreeFlowTests passed")
     }
 }

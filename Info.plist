@@ -3,19 +3,19 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>FreeFlow</string>
+    <string>FreeFlow Notes</string>
     <key>CFBundleDisplayName</key>
-    <string>FreeFlow</string>
+    <string>FreeFlow Notes</string>
     <key>CFBundleIdentifier</key>
-    <string>com.zachlatta.freeflow</string>
+    <string>com.bharat2808.freeflownotes</string>
     <key>CFBundleVersion</key>
-    <string>0.3.0</string>
+    <string>1</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.3.0</string>
+    <string>1.3.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>FreeFlow</string>
+    <string>FreeFlow Notes</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
@@ -23,10 +23,10 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>FreeFlow needs microphone access to transcribe your speech.</string>
+    <string>FreeFlow Notes needs microphone access to transcribe your speech.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>FreeFlow needs speech recognition to convert your voice to text.</string>
+    <string>FreeFlow Notes needs speech recognition to convert your voice to text.</string>
     <key>NSAccessibilityUsageDescription</key>
-    <string>FreeFlow needs accessibility access to detect the text cursor position and paste transcribed text.</string>
+    <string>FreeFlow Notes needs accessibility access to detect the text cursor position and paste transcribed text.</string>
 </dict>
 </plist>

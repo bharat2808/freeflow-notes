@@ -54,16 +54,18 @@ struct SetupView: View {
     var onComplete: () -> Void
     @EnvironmentObject var appState: AppState
     @Environment(\.openURL) private var openURL
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
+    private let freeflowRepoURL = URL(string: "https://github.com/bharat2808/freeflow-notes")!
     private enum SetupStep: Int, CaseIterable {
         case welcome = 0
         case apiKey
+        case localWhisper
         case micPermission
         case accessibility
         case screenRecording
         case holdShortcut
         case toggleShortcut
         case copyAgainShortcut
+        case generateShortcut
         case commandMode
         case vocabulary
         case launchAtLogin
@@ -81,6 +83,11 @@ struct SetupView: View {
     @State private var transcriptionAPIKeyInput: String = ""
     @State private var isValidatingKey = false
     @State private var keyValidationError: String?
+    @State private var isInstallingLocalWhisper = false
+    @State private var isDownloadingLocalWhisperModel = false
+    @State private var localWhisperDownloadProgress = 0.0
+    @State private var localWhisperSetupMessage: String?
+    @State private var localWhisperSetupError: String?
     @State private var showingProviderSettingsSheet = false
     @State private var accessibilityTimer: Timer?
     @State private var screenRecordingTimer: Timer?
@@ -101,15 +108,17 @@ struct SetupView: View {
     @State private var holdShortcutValidationMessage: String?
     @State private var toggleShortcutValidationMessage: String?
     @State private var copyAgainShortcutValidationMessage: String?
+    @State private var generateShortcutValidationMessage: String?
     @State private var isCapturingHoldShortcut = false
     @State private var isCapturingToggleShortcut = false
     @State private var isCapturingCopyAgainShortcut = false
+    @State private var isCapturingGenerateShortcut = false
     @StateObject private var testHotkeyHarness = SetupTestHotkeyHarness()
     @AppStorage("use_compact_overlay") private var useCompactOverlay = true
 
     private let totalSteps: [SetupStep] = SetupStep.allCases
     private var isCapturingShortcut: Bool {
-        isCapturingHoldShortcut || isCapturingToggleShortcut || isCapturingCopyAgainShortcut
+        isCapturingHoldShortcut || isCapturingToggleShortcut || isCapturingCopyAgainShortcut || isCapturingGenerateShortcut
     }
 
     var body: some View {
@@ -235,6 +244,8 @@ struct SetupView: View {
             welcomeStep
         case .apiKey:
             apiKeyStep
+        case .localWhisper:
+            localWhisperStep
         case .micPermission:
             micPermissionStep
         case .accessibility:
@@ -247,6 +258,8 @@ struct SetupView: View {
             toggleShortcutStep
         case .copyAgainShortcut:
             copyAgainShortcutStep
+        case .generateShortcut:
+            generateShortcutStep
         case .commandMode:
             commandModeStep
         case .vocabulary:
@@ -275,7 +288,7 @@ struct SetupView: View {
                 Text("Welcome to \(AppName.displayName)")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
 
-                Text("Dictate text anywhere on your Mac.\nHold to talk or tap to toggle dictation.")
+                Text("Dictate into any app, or save a thought as a Markdown note.\nUse your shortcut to start talking.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -283,21 +296,10 @@ struct SetupView: View {
 
             VStack(spacing: 10) {
                 HStack(spacing: 8) {
-                    AsyncImage(url: URL(string: "https://avatars.githubusercontent.com/u/992248")) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().aspectRatio(contentMode: .fill)
-                        default:
-                            Color.gray.opacity(0.2)
-                        }
-                    }
-                    .frame(width: 26, height: 26)
-                    .clipShape(Circle())
-
                     Button {
                         openURL(freeflowRepoURL)
                     } label: {
-                        Text("zachlatta/freeflow")
+                        Text("bharat2808/freeflow-notes")
                             .font(.system(.caption, design: .monospaced).weight(.medium))
                     }
                     .buttonStyle(.plain)
@@ -334,41 +336,6 @@ struct SetupView: View {
                         .background(Capsule().fill(Color.yellow.opacity(0.18)))
                     }
                     .buttonStyle(.plain)
-                }
-
-                if !githubCache.recentContributors.isEmpty {
-                    Divider()
-                    HStack(spacing: 8) {
-                        HStack(spacing: -6) {
-                            ForEach(githubCache.recentContributors) { contributor in
-                                Button {
-                                    openURL(contributor.htmlUrl)
-                                } label: {
-                                    AsyncImage(url: contributor.avatarThumbnailUrl) { phase in
-                                        switch phase {
-                                        case .success(let image):
-                                            image.resizable().aspectRatio(contentMode: .fill)
-                                        default:
-                                            Color.gray.opacity(0.2)
-                                        }
-                                    }
-                                    .frame(width: 22, height: 22)
-                                    .clipShape(Circle())
-                                    .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(Text(contributor.login))
-                                .accessibilityHint(Text("Open contributor profile"))
-                            }
-                        }
-                        .clipped()
-                        Text("recent contributors")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .fixedSize()
-                        Spacer()
-                    }
-                    .clipped()
                 }
             }
             .padding(12)
@@ -514,6 +481,86 @@ struct SetupView: View {
             .cornerRadius(8)
 
         }
+    }
+
+    var localWhisperStep: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "waveform.and.mic")
+                .font(.system(size: 54))
+                .foregroundStyle(.blue)
+            Text("Local Whisper (Optional)")
+                .font(.title)
+                .fontWeight(.bold)
+            Text("Install whisper.cpp and download the local English model to enable on-device transcription. You can skip this and configure it later in Settings.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                setupDependencyRow(
+                    title: "whisper-cli",
+                    detail: LocalWhisperInstaller.installedExecutableURL?.path ?? "Not installed",
+                    ready: LocalWhisperInstaller.installedExecutableURL != nil
+                )
+                setupDependencyRow(
+                    title: "English model",
+                    detail: FileManager.default.fileExists(atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path) ? "Downloaded" : "Not downloaded",
+                    ready: FileManager.default.fileExists(atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path)
+                )
+            }
+
+            HStack(spacing: 10) {
+                Button(isInstallingLocalWhisper ? "Installing…" : "Install whisper.cpp") {
+                    installLocalWhisper()
+                }
+                .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
+
+                let modelDownloaded = FileManager.default.fileExists(
+                    atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                )
+                Button(isDownloadingLocalWhisperModel ? "Downloading…" : (modelDownloaded ? "Downloaded" : "Download model")) {
+                    downloadLocalWhisperModel()
+                }
+                .disabled(isDownloadingLocalWhisperModel || modelDownloaded)
+            }
+
+            if isInstallingLocalWhisper {
+                ProgressView()
+                Text(localWhisperSetupMessage ?? "Installing…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isDownloadingLocalWhisperModel {
+                ProgressView(value: localWhisperDownloadProgress)
+                Text("Downloading (Int(localWhisperDownloadProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let localWhisperSetupMessage {
+                Text(localWhisperSetupMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let localWhisperSetupError {
+                Label(localWhisperSetupError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    private func setupDependencyRow(title: String, detail: String, ready: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: ready ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ready ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(8)
     }
 
     var accessibilityStep: some View {
@@ -711,6 +758,41 @@ struct SetupView: View {
                 .padding(.top, 10)
 
             if appState.copyAgainShortcut.usesFnKey {
+                Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    var generateShortcutStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 60))
+                .foregroundStyle(.blue)
+
+            Text("Generate Shortcut")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("Choose the shortcut to hold while speaking a request for newly generated content. FreeFlow will use the active app context and paste the generated result into the focused field. You can disable this if you do not need it.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ShortcutRoleSection(
+                role: .generate,
+                selection: appState.generateShortcut,
+                validationMessage: generateShortcutValidationMessage,
+                isCapturing: $isCapturingGenerateShortcut,
+                onSelect: { binding in
+                    generateShortcutValidationMessage = appState.setShortcut(binding, for: .generate)
+                }
+            )
+                .padding(.top, 10)
+
+            if appState.generateShortcut.usesFnKey {
                 Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -1157,6 +1239,54 @@ struct SetupView: View {
         }
     }
 
+    private func installLocalWhisper() {
+        guard !isInstallingLocalWhisper else { return }
+        isInstallingLocalWhisper = true
+        localWhisperSetupError = nil
+        Task {
+            do {
+                let executableURL = try await LocalWhisperInstaller.installWhisperCpp { message in
+                    Task { @MainActor in localWhisperSetupMessage = message }
+                }
+                await MainActor.run {
+                    appState.localWhisperExecutablePath = executableURL.path
+                    localWhisperSetupMessage = "Installed at (executableURL.path)"
+                    isInstallingLocalWhisper = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperSetupError = error.localizedDescription
+                    isInstallingLocalWhisper = false
+                }
+            }
+        }
+    }
+
+    private func downloadLocalWhisperModel() {
+        guard !isDownloadingLocalWhisperModel else { return }
+        isDownloadingLocalWhisperModel = true
+        localWhisperDownloadProgress = 0
+        localWhisperSetupError = nil
+        Task {
+            do {
+                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel { progress in
+                    Task { @MainActor in localWhisperDownloadProgress = progress }
+                }
+                await MainActor.run {
+                    appState.localWhisperModelPath = url.path
+                    localWhisperDownloadProgress = 1
+                    localWhisperSetupMessage = "Model downloaded"
+                    isDownloadingLocalWhisperModel = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperSetupError = "Could not download the model: (error.localizedDescription)"
+                    isDownloadingLocalWhisperModel = false
+                }
+            }
+        }
+    }
+
     func saveCustomVocabularyAndContinue() {
         appState.customVocabulary = customVocabularyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         withAnimation {
@@ -1396,37 +1526,17 @@ struct GitHubStarUser: Decodable {
     }
 }
 
-struct GitHubContributor: Decodable, Identifiable {
-    let id: Int
-    let login: String
-    let avatarUrl: URL
-    let htmlUrl: URL
-
-    var avatarThumbnailUrl: URL {
-        let separator = avatarUrl.absoluteString.contains("?") ? "&" : "?"
-        return URL(string: avatarUrl.absoluteString + "\(separator)s=44") ?? avatarUrl
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case login
-        case avatarUrl = "avatar_url"
-        case htmlUrl = "html_url"
-    }
-}
-
 @MainActor
 class GitHubMetadataCache: ObservableObject {
     static let shared = GitHubMetadataCache()
 
     @Published var starCount: Int?
     @Published var recentStargazers: [GitHubStarRecord] = []
-    @Published var recentContributors: [GitHubContributor] = []
     @Published var isLoading = true
 
     private var lastFetchDate: Date?
     private let cacheDuration: TimeInterval = 5 * 60 // 5 minutes
-    private let repoAPIURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow")!
+    private let repoAPIURL = URL(string: "https://api.github.com/repos/bharat2808/freeflow-notes")!
 
     private init() {}
 
@@ -1449,7 +1559,7 @@ class GitHubMetadataCache: ObservableObject {
             if count > 0 {
                 let perPage = 100
                 let lastPage = max(1, Int(ceil(Double(count) / Double(perPage))))
-                let stargazersURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/stargazers?per_page=\(perPage)&page=\(lastPage)")!
+                let stargazersURL = URL(string: "https://api.github.com/repos/bharat2808/freeflow-notes/stargazers?per_page=\(perPage)&page=\(lastPage)")!
                 var request = URLRequest(url: stargazersURL)
                 request.setValue("application/vnd.github.v3.star+json", forHTTPHeaderField: "Accept")
                 let starredResult = try await URLSession.shared.data(for: request)
@@ -1460,21 +1570,8 @@ class GitHubMetadataCache: ObservableObject {
                 }
             }
 
-            var contributors: [GitHubContributor] = []
-            let contributorsURL = URL(string: "https://api.github.com/repos/zachlatta/freeflow/contributors?per_page=15")!
-            do {
-                let contributorsResult = try await URLSession.shared.data(from: contributorsURL)
-                if let contribHTTP = contributorsResult.1 as? HTTPURLResponse,
-                   (200..<300).contains(contribHTTP.statusCode) {
-                    contributors = try JSONDecoder().decode([GitHubContributor].self, from: contributorsResult.0)
-                }
-            } catch {
-                contributors = []
-            }
-
             starCount = count
             recentStargazers = recent
-            recentContributors = contributors
             isLoading = false
             lastFetchDate = Date()
         } catch {

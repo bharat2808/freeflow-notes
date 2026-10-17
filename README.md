@@ -2,42 +2,52 @@
   <img src="Resources/AppIcon-Source.png" width="128" height="128" alt="FreeFlow icon">
 </p>
 
-<h1 align="center">FreeFlow</h1>
+<h1 align="center">FreeFlow Notes</h1>
 
 <p align="center">
-  Free and open source alternative to <a href="https://wisprflow.ai">Wispr Flow</a>, <a href="https://superwhisper.com">Superwhisper</a>, and <a href="https://monologue.to">Monologue</a>.
+  Open-source macOS dictation and voice notes, saved as Markdown.
+
+Free and open source alternative to <a href="https://wisprflow.ai">Wispr Flow</a>, <a href="https://superwhisper.com">Superwhisper</a>, and <a href="https://monologue.to">Monologue</a>.
 </p>
 
 <p align="center">
-  <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg"><b>⬇ Download FreeFlow.dmg</b></a><br>
-  <sub>Works on all Macs (Apple Silicon + Intel)</sub>
+  <a href="https://github.com/bharat2808/freeflow-notes/releases/latest/download/FreeFlow-Notes.dmg"><b>⬇ Download FreeFlow Notes</b></a><br>
+  <sub>Universal build for Apple Silicon and Intel · <a href="https://github.com/bharat2808/freeflow-notes">Source code</a></sub>
 </p>
 
 ---
 
+## App preview
+
 <p align="center">
-  <img src="Resources/demo.gif" alt="FreeFlow demo" width="600">
+  <img src="Resources/screenshots/notes-editor.png" alt="FreeFlow Notes Markdown editor with sample notes" width="720">
 </p>
 
 <p align="center">
-  <i>Thank you to <a href="https://github.com/marcbodea">@marcbodea</a> for maintaining FreeFlow!</i>
+  <img src="Resources/screenshots/notes-preview.png" alt="FreeFlow Notes rendered Markdown preview" width="720">
+</p>
+
+<p align="center">
+  <i>FreeFlow Notes builds on <a href="https://github.com/zachlatta/freeflow">FreeFlow</a> by Zach Latta and its contributors.</i>
 </p>
 
 ## Overview
 
-FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/). It gives you fast AI transcription, context-aware cleanup, and voice-driven text editing without a monthly subscription.
+FreeFlow Notes is a free, open-source macOS app for dictation and voice notes. Dictate into the app you are using, or capture a thought as a Markdown note. Notes stay on your Mac.
 
 ## Quick Start
 
-1. Download the app from above or [click here](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg)
-2. Get a free Groq API key from [groq.com](https://groq.com/)
-3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation, and have whatever you say pasted into the current text field
+1. Download the universal Mac app above.
+2. Choose hosted transcription with your provider API key, or configure local Whisper in Settings.
+3. Use the shortcut shown during setup to dictate into the focused text field. Open Notes from the menu bar to save speech as Markdown.
 
 ## Features
 
 - **Custom shortcuts:** Customize both hold-to-talk and toggle dictation shortcuts. If your toggle shortcut extends your hold shortcut, you can start in hold mode and press the extra modifier keys to latch into tap mode without stopping the recording.
 - **Context-aware cleanup:** FreeFlow can read nearby app context so names, terms, and phrases are spelled correctly when you dictate into email, terminals, docs, and other apps.
 - **Custom vocabulary:** Add names, jargon, and project-specific words that FreeFlow should preserve during cleanup.
+- **Voice notes:** Record, edit, append to, and organize notes in folders. Notes are saved as Markdown files on your Mac.
+- **Local transcription:** Configure a local Whisper model when you want transcription to run on your Mac.
 - **OpenAI-compatible providers:** Use Groq by default, or configure a custom model and API URL in settings.
 
 ## Edit Mode
@@ -46,7 +56,7 @@ Edit Mode lets you highlight existing text and transform it with a spoken instru
 
 ## Privacy
 
-There is no FreeFlow server, so FreeFlow does not store or retain your data. The only information that leaves your computer are API calls to your configured transcription and LLM provider.
+Notes are stored locally as Markdown. If you choose hosted transcription or cleanup, the audio, text, or app context needed for that feature is sent to the provider configured in Settings. Local Whisper transcription can run on your Mac.
 
 ## Custom Cleanup
 
@@ -82,15 +92,20 @@ FreeFlow can use OpenAI-compatible local or self-hosted providers instead of Gro
 
 Local models are often slower than hosted providers, especially on cold start, long recordings, or busy hardware.
 
+For Local Whisper, the app keeps a model loaded in a separate helper process and reuses it for live previews and final transcriptions across recordings. The first request pays the startup cost; changing the model or language reloads it, and quitting FreeFlow releases it. A helper failure does not terminate FreeFlow.
+
+The persistent helper currently supports the Whisper 1.8.6 native API. Other library versions or unsupported installations use the configured CLI for compatibility, which reloads the model per request. Build-time headers are pinned in `Vendor/whisper-1.8.6`; runtime libraries still come from your local Whisper installation.
+
+
 <details>
   <summary>Configure longer timeouts for local models</summary>
 
-  FreeFlow keeps the default network timeout at 20 seconds, but you can extend it with macOS defaults:
+  FreeFlow Notes keeps the default network timeout at 20 seconds, but you can extend it with macOS defaults:
 
 ```bash
-defaults write com.zachlatta.freeflow transcription_timeout_seconds -float 120
-defaults write com.zachlatta.freeflow post_processing_timeout_seconds -float 120
-defaults write com.zachlatta.freeflow context_request_timeout_seconds -float 120
+defaults write com.bharat2808.freeflownotes transcription_timeout_seconds -float 120
+defaults write com.bharat2808.freeflownotes post_processing_timeout_seconds -float 120
+defaults write com.bharat2808.freeflownotes context_request_timeout_seconds -float 120
 ```
 
 The timeout keys are:
@@ -102,12 +117,21 @@ The timeout keys are:
 Only positive values are used. Remove a custom timeout to return to the 20-second default:
 
 ```bash
-defaults delete com.zachlatta.freeflow transcription_timeout_seconds
-defaults delete com.zachlatta.freeflow post_processing_timeout_seconds
-defaults delete com.zachlatta.freeflow context_request_timeout_seconds
+defaults delete com.bharat2808.freeflownotes transcription_timeout_seconds
+defaults delete com.bharat2808.freeflownotes post_processing_timeout_seconds
+defaults delete com.bharat2808.freeflownotes context_request_timeout_seconds
 ```
 
 </details>
+
+## Agent Notes Connector
+
+FreeFlow includes an optional local MCP connector for agents that support stdio
+servers. Build it with `make connector-build`, then print a client configuration
+with `build/freeflow-notes-mcp config --client codex` (or `claude`). Start the
+server with `build/freeflow-notes-mcp serve --stdio`. It exposes the local notes
+library through the `usage_guidelines`, `notes`, and `search_notes` tools; access
+is restricted to the FreeFlow notes directory.
 
 ## License
 

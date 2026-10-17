@@ -2,7 +2,7 @@ import Foundation
 import os.log
 
 private let transcriptTextLog = OSLog(
-    subsystem: "com.zachlatta.freeflow",
+    subsystem: "com.bharat2808.freeflownotes",
     category: "Transcription"
 )
 
@@ -179,5 +179,53 @@ enum TranscriptOutputSanitizer {
         return Set(parts.map(String.init).filter { token in
             token.count > 1 && !stopWords.contains(token)
         })
+    }
+}
+
+struct TranscriptCommandParsingResult: Equatable {
+    let transcript: String
+    let shouldPressEnterAfterPaste: Bool
+}
+
+enum TranscriptCommandParser {
+    private static let trailingPressEnterCommandPattern = try! NSRegularExpression(
+        pattern: #"(?i)(?:^|[ \t\r\n,;:\-]+)press[ \t\r\n]+enter[\s\p{P}]*$"#
+    )
+
+    static func parse(
+        from transcript: String,
+        pressEnterCommandEnabled: Bool
+    ) -> TranscriptCommandParsingResult {
+        guard pressEnterCommandEnabled else {
+            return TranscriptCommandParsingResult(
+                transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines),
+                shouldPressEnterAfterPaste: false
+            )
+        }
+
+        let fullRange = NSRange(transcript.startIndex..<transcript.endIndex, in: transcript)
+        guard
+            let match = trailingPressEnterCommandPattern.firstMatch(in: transcript, range: fullRange),
+            let commandRange = Range(match.range, in: transcript)
+        else {
+            return TranscriptCommandParsingResult(
+                transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines),
+                shouldPressEnterAfterPaste: false
+            )
+        }
+
+        var strippedTranscript = transcript
+        strippedTranscript.removeSubrange(commandRange)
+        return TranscriptCommandParsingResult(
+            transcript: strippedTranscript.trimmingCharacters(in: .whitespacesAndNewlines),
+            shouldPressEnterAfterPaste: true
+        )
+    }
+}
+
+enum TranscriptPasteTextFormatter {
+    static func textToWrite(for transcript: String) -> String {
+        guard let last = transcript.last, ".!?".contains(last) else { return transcript }
+        return transcript + " "
     }
 }
