@@ -48,7 +48,9 @@ CONNECTOR_RESOURCES_BINARY = $(RESOURCES)/freeflow-notes-mcp
 CONNECTOR_RESOURCES_BINARY_TARGET := $(subst $(space),\ ,$(CONNECTOR_RESOURCES_BINARY))
 CONNECTOR_PACKAGE_SOURCES = $(shell find ConnectorPackage -path '*/.build' -prune -o -type f -print | LC_ALL=C sort)
 ARCH ?= $(shell uname -m)
-MARKDOWNUI_BUILD_DIR = $(shell swift build --show-bin-path --arch "$(ARCH)")
+MARKDOWNUI_ARM64_BUILD_DIR = $(shell swift build --show-bin-path --arch arm64 --scratch-path .build/arm64-apple-macosx)
+MARKDOWNUI_X86_64_BUILD_DIR = $(shell swift build --show-bin-path --arch x86_64 --scratch-path .build/x86_64-apple-macosx)
+MARKDOWNUI_BUILD_DIR = $(if $(filter universal,$(ARCH)),$(MARKDOWNUI_ARM64_BUILD_DIR),$(shell swift build --show-bin-path --arch "$(ARCH)" --scratch-path .build/$(ARCH)-apple-macosx))
 MARKDOWNUI_ARCHIVE = $(BUILD_DIR)/libMarkdownUI-$(ARCH).a
 ifeq ($(ARCH),universal)
 MARKDOWNUI_REQUIRED_ARCHIVES = $(BUILD_DIR)/libMarkdownUI-arm64.a $(BUILD_DIR)/libMarkdownUI-x86_64.a
@@ -79,14 +81,14 @@ ifeq ($(ARCH),universal)
 		-o "$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target arm64-apple-macosx13.0 \
-		-I ".build/arm64-apple-macosx/debug/Modules" \
+		-I "$(MARKDOWNUI_ARM64_BUILD_DIR)" \
 		$(SOURCES) "$(BUILD_DIR)/libMarkdownUI-arm64.a"
 	swiftc \
 		-parse-as-library \
 		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target x86_64-apple-macosx13.0 \
-		-I ".build/x86_64-apple-macosx/debug/Modules" \
+		-I "$(MARKDOWNUI_X86_64_BUILD_DIR)" \
 		$(SOURCES) "$(BUILD_DIR)/libMarkdownUI-x86_64.a"
 	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
 		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
@@ -126,21 +128,24 @@ endif
 $(CONNECTOR_RESOURCES_BINARY_TARGET): $(CONNECTOR_PACKAGE_SOURCES)
 	@mkdir -p "$(RESOURCES)"
 ifeq ($(ARCH),universal)
-	@swift build --package-path ConnectorPackage -c release --arch arm64
-	@swift build --package-path ConnectorPackage -c release --arch x86_64
+	@swift build --package-path ConnectorPackage -c release --arch arm64 --scratch-path ConnectorPackage/.build/arm64-apple-macosx
+	@cp "$$(swift build --package-path ConnectorPackage --show-bin-path -c release --arch arm64 --scratch-path ConnectorPackage/.build/arm64-apple-macosx)/freeflow-notes-mcp" "$(BUILD_DIR)/freeflow-notes-mcp-arm64"
+	@swift build --package-path ConnectorPackage -c release --arch x86_64 --scratch-path ConnectorPackage/.build/x86_64-apple-macosx
+	@cp "$$(swift build --package-path ConnectorPackage --show-bin-path -c release --arch x86_64 --scratch-path ConnectorPackage/.build/x86_64-apple-macosx)/freeflow-notes-mcp" "$(BUILD_DIR)/freeflow-notes-mcp-x86_64"
 	@lipo -create -output "$@" \
-		"ConnectorPackage/.build/arm64-apple-macosx/release/freeflow-notes-mcp" \
-		"ConnectorPackage/.build/x86_64-apple-macosx/release/freeflow-notes-mcp"
+		"$(BUILD_DIR)/freeflow-notes-mcp-arm64" \
+		"$(BUILD_DIR)/freeflow-notes-mcp-x86_64"
+	@rm "$(BUILD_DIR)/freeflow-notes-mcp-arm64" "$(BUILD_DIR)/freeflow-notes-mcp-x86_64"
 else
-	@swift build --package-path ConnectorPackage -c release --arch "$(ARCH)"
-	@cp "ConnectorPackage/.build/$(ARCH)-apple-macosx/release/freeflow-notes-mcp" "$@"
+	@swift build --package-path ConnectorPackage -c release --arch "$(ARCH)" --scratch-path "ConnectorPackage/.build/$(ARCH)-apple-macosx"
+	@cp "$$(swift build --package-path ConnectorPackage --show-bin-path -c release --arch "$(ARCH)" --scratch-path "ConnectorPackage/.build/$(ARCH)-apple-macosx)/freeflow-notes-mcp" "$@"
 endif
 	@chmod 755 "$@"
 
 check: typecheck test validate
 
 typecheck:
-	swift build --target MarkdownUIBridge --disable-sandbox
+	swift build --target MarkdownUIBridge --arch "$(ARCH)" --scratch-path ".build/$(ARCH)-apple-macosx" --disable-sandbox
 	swiftc \
 		-parse-as-library \
 		-typecheck \
@@ -153,17 +158,17 @@ typecheck:
 markdownui: $(MARKDOWNUI_REQUIRED_ARCHIVES)
 
 connector-build:
-	 swift build --package-path ConnectorPackage -c release
+	 swift build --package-path ConnectorPackage -c release --arch "$(ARCH)" --scratch-path "ConnectorPackage/.build/$(ARCH)-apple-macosx"
 	 @mkdir -p "$(BUILD_DIR)"
-	 @cp ConnectorPackage/.build/arm64-apple-macosx/release/freeflow-notes-mcp "$(BUILD_DIR)/freeflow-notes-mcp"
+	 @cp "$$(swift build --package-path ConnectorPackage --show-bin-path -c release --arch "$(ARCH)" --scratch-path "ConnectorPackage/.build/$(ARCH)-apple-macosx)/freeflow-notes-mcp" "$(BUILD_DIR)/freeflow-notes-mcp"
 
 connector-test:
 	 swift test --package-path ConnectorPackage
 
 $(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupport.swift
 	@mkdir -p "$(BUILD_DIR)"
-	swift build --target MarkdownUIBridge --arch "$*" --disable-sandbox
-	@libtool -static -o "$@" $$(find "$$(swift build --show-bin-path --arch "$*")" -type f -name '*.o' ! -path '*/MarkdownUIBridge.build/*' | LC_ALL=C sort)
+	swift build --target MarkdownUIBridge --arch "$*" --scratch-path ".build/$*-apple-macosx" --disable-sandbox
+	@libtool -static -o "$@" $$(find "$$(swift build --show-bin-path --arch $* --scratch-path .build/$*-apple-macosx)" -type f -name '*.o' ! -path '*/MarkdownUIBridge.build/*' | LC_ALL=C sort)
 
 test: whisper-bridge-test whisper-worker-fixture $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
 	@mkdir -p "$(BUILD_DIR)"
@@ -241,9 +246,10 @@ dmg: all
 	@cp -R "$(APP_BUNDLE)" $(BUILD_DIR)/dmg-staging/
 	@osascript -e 'tell application "Finder" to make alias file to POSIX file "/Applications" at POSIX file "'"$$(cd $(BUILD_DIR)/dmg-staging && pwd)"'"'
 	@ALIAS=$$(find $(BUILD_DIR)/dmg-staging -maxdepth 1 -not -name '*.app' -not -name '.DS_Store' -type f | head -1) && mv "$$ALIAS" "$(BUILD_DIR)/dmg-staging/Applications"
-	@fileicon set "$(BUILD_DIR)/dmg-staging/Applications" /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ApplicationsFolderIcon.icns
+	@if command -v fileicon >/dev/null 2>&1; then fileicon set "$(BUILD_DIR)/dmg-staging/Applications" /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ApplicationsFolderIcon.icns; fi
 	@echo "Creating DMG..."
-	@create-dmg \
+	@if command -v create-dmg >/dev/null 2>&1; then \
+		create-dmg \
 		--volname "$(APP_NAME)" \
 		--volicon "$(ICON_ICNS)" \
 		--background "Resources/dmg-background.tiff" \
@@ -255,7 +261,10 @@ dmg: all
 		--icon "Applications" 480 170 \
 		--no-internet-enable \
 		"$(BUILD_DIR)/$(APP_NAME).dmg" \
-		"$(BUILD_DIR)/dmg-staging"
+		"$(BUILD_DIR)/dmg-staging"; \
+	else \
+		hdiutil create -volname "$(APP_NAME)" -srcfolder "$(BUILD_DIR)/dmg-staging" -ov -format UDZO "$(BUILD_DIR)/$(APP_NAME).dmg"; \
+	fi
 	@rm -rf $(BUILD_DIR)/dmg-staging
 	@echo "Created $(BUILD_DIR)/$(APP_NAME).dmg"
 
