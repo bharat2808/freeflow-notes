@@ -81,6 +81,7 @@ ifeq ($(ARCH),universal)
 		-o "$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target arm64-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_ARM64_BUILD_DIR)/Modules" \
 		-I "$(MARKDOWNUI_ARM64_BUILD_DIR)" \
 		$(SOURCES) "$(BUILD_DIR)/libMarkdownUI-arm64.a"
 	swiftc \
@@ -88,6 +89,7 @@ ifeq ($(ARCH),universal)
 		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target x86_64-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_X86_64_BUILD_DIR)/Modules" \
 		-I "$(MARKDOWNUI_X86_64_BUILD_DIR)" \
 		$(SOURCES) "$(BUILD_DIR)/libMarkdownUI-x86_64.a"
 	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
@@ -100,6 +102,7 @@ else
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
 		-I "$(MARKDOWNUI_BUILD_DIR)" \
 		$(SOURCES) "$(MARKDOWNUI_ARCHIVE)"
 endif
@@ -152,6 +155,7 @@ typecheck:
 		-warnings-as-errors \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
 		-I "$(MARKDOWNUI_BUILD_DIR)" \
 		$(SOURCES)
 
@@ -178,6 +182,7 @@ test: whisper-bridge-test whisper-worker-fixture $(WHISPER_BRIDGE_OBJECT) $(MARK
 		-o "$(TEST_RUNNER)" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
 		-I "$(MARKDOWNUI_BUILD_DIR)" \
 		$(TEST_PRODUCTION_SOURCES) \
 		$(TEST_SOURCES) "$(MARKDOWNUI_ARCHIVE)"
