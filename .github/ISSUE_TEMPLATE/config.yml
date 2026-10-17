@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Questions and support
-    url: https://github.com/zachlatta/freeflow/discussions
-    about: Ask usage questions or get help from the community.
+  - name: Questions and bug reports
+    url: https://github.com/bharat2808/freeflow-notes/issues
+    about: Ask a question or report a problem.

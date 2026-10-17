@@ -37,7 +37,7 @@ jobs:
         run: |
           plutil -replace CFBundleShortVersionString -string "${{ steps.version.outputs.version }}" Info.plist
           plutil -replace CFBundleVersion -string "${{ github.run_number }}" Info.plist
-          plutil -replace FreeFlowBuildTag -string "${{ steps.version.outputs.build_tag }}" Info.plist
+          plutil -insert FreeFlowBuildTag -string "${{ steps.version.outputs.build_tag }}" Info.plist
 
       - name: Install build tools
         run: |
@@ -144,7 +144,7 @@ jobs:
           body: |
             Development build from `${{ github.sha }}`.
 
-            **[FreeFlow-Dev.dmg](https://github.com/zachlatta/freeflow/releases/download/${{ steps.version.outputs.tag }}/FreeFlow-Dev.dmg)** - Universal dev build for all Macs (Apple Silicon + Intel).
+            **[FreeFlow-Dev.dmg](https://github.com/bharat2808/freeflow-notes/releases/download/${{ steps.version.outputs.tag }}/FreeFlow-Dev.dmg)** - Universal dev build for all Macs (Apple Silicon + Intel).
           generate_release_notes: false
           make_latest: false
           prerelease: true

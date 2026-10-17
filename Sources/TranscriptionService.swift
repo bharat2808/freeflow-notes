@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let transcriptionLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Transcription")
+private let transcriptionLog = OSLog(subsystem: "com.bharat2808.freeflownotes", category: "Transcription")
 
 protocol AudioTranscriber {
     func transcribe(fileURL: URL) async throws -> String

@@ -1,12 +1,20 @@
 # Changelog
 
-All notable changes to FreeFlow are documented here.
+All notable changes to FreeFlow Notes are documented here.
 
 This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATCH`, where:
 
 - `MAJOR` changes include breaking behavior or major compatibility changes.
 - `MINOR` changes add user-visible features and improvements.
 - `PATCH` changes fix bugs, polish existing behavior, or make small internal improvements.
+
+## [1.3.0] - 2026-10-17
+
+### Added
+
+- Markdown voice notes that can be created, searched, organized into folders, appended to, and updated by voice.
+- Optional local Whisper transcription for speech processed on the Mac.
+- A standalone FreeFlow Notes app identity and update feed.
 
 ## [1.2.1] - 2026-08-11
 

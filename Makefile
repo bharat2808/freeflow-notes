@@ -1,5 +1,5 @@
 APP_NAME ?= FreeFlow Dev
-BUNDLE_ID ?= com.zachlatta.freeflow.dev
+BUNDLE_ID ?= com.bharat2808.freeflownotes.dev
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 CODESIGN_IDENTITY ?= FreeFlow Dev
@@ -57,13 +57,13 @@ ifeq ($(ARCH),universal)
 		-o "$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target arm64-apple-macosx13.0 \
-		$(SOURCES)
+		$(SOURCES) $(BUILD_DIR)/WhisperBridge-arm64.o
 	swiftc \
 		-parse-as-library \
 		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target x86_64-apple-macosx13.0 \
-		$(SOURCES) $(WHISPER_BRIDGE_OBJECT)
+		$(SOURCES) $(BUILD_DIR)/WhisperBridge-x86_64.o
 	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
 		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		"$(MACOS_DIR)/$(APP_NAME)-x86_64"
