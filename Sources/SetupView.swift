@@ -58,12 +58,14 @@ struct SetupView: View {
     private enum SetupStep: Int, CaseIterable {
         case welcome = 0
         case apiKey
+        case localWhisper
         case micPermission
         case accessibility
         case screenRecording
         case holdShortcut
         case toggleShortcut
         case copyAgainShortcut
+        case generateShortcut
         case commandMode
         case vocabulary
         case launchAtLogin
@@ -81,6 +83,11 @@ struct SetupView: View {
     @State private var transcriptionAPIKeyInput: String = ""
     @State private var isValidatingKey = false
     @State private var keyValidationError: String?
+    @State private var isInstallingLocalWhisper = false
+    @State private var isDownloadingLocalWhisperModel = false
+    @State private var localWhisperDownloadProgress = 0.0
+    @State private var localWhisperSetupMessage: String?
+    @State private var localWhisperSetupError: String?
     @State private var showingProviderSettingsSheet = false
     @State private var accessibilityTimer: Timer?
     @State private var screenRecordingTimer: Timer?
@@ -101,15 +108,17 @@ struct SetupView: View {
     @State private var holdShortcutValidationMessage: String?
     @State private var toggleShortcutValidationMessage: String?
     @State private var copyAgainShortcutValidationMessage: String?
+    @State private var generateShortcutValidationMessage: String?
     @State private var isCapturingHoldShortcut = false
     @State private var isCapturingToggleShortcut = false
     @State private var isCapturingCopyAgainShortcut = false
+    @State private var isCapturingGenerateShortcut = false
     @StateObject private var testHotkeyHarness = SetupTestHotkeyHarness()
     @AppStorage("use_compact_overlay") private var useCompactOverlay = true
 
     private let totalSteps: [SetupStep] = SetupStep.allCases
     private var isCapturingShortcut: Bool {
-        isCapturingHoldShortcut || isCapturingToggleShortcut || isCapturingCopyAgainShortcut
+        isCapturingHoldShortcut || isCapturingToggleShortcut || isCapturingCopyAgainShortcut || isCapturingGenerateShortcut
     }
 
     var body: some View {
@@ -235,6 +244,8 @@ struct SetupView: View {
             welcomeStep
         case .apiKey:
             apiKeyStep
+        case .localWhisper:
+            localWhisperStep
         case .micPermission:
             micPermissionStep
         case .accessibility:
@@ -247,6 +258,8 @@ struct SetupView: View {
             toggleShortcutStep
         case .copyAgainShortcut:
             copyAgainShortcutStep
+        case .generateShortcut:
+            generateShortcutStep
         case .commandMode:
             commandModeStep
         case .vocabulary:
@@ -470,6 +483,86 @@ struct SetupView: View {
         }
     }
 
+    var localWhisperStep: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "waveform.and.mic")
+                .font(.system(size: 54))
+                .foregroundStyle(.blue)
+            Text("Local Whisper (Optional)")
+                .font(.title)
+                .fontWeight(.bold)
+            Text("Install whisper.cpp and download the local English model to enable on-device transcription. You can skip this and configure it later in Settings.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                setupDependencyRow(
+                    title: "whisper-cli",
+                    detail: LocalWhisperInstaller.installedExecutableURL?.path ?? "Not installed",
+                    ready: LocalWhisperInstaller.installedExecutableURL != nil
+                )
+                setupDependencyRow(
+                    title: "English model",
+                    detail: FileManager.default.fileExists(atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path) ? "Downloaded" : "Not downloaded",
+                    ready: FileManager.default.fileExists(atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path)
+                )
+            }
+
+            HStack(spacing: 10) {
+                Button(isInstallingLocalWhisper ? "Installing…" : "Install whisper.cpp") {
+                    installLocalWhisper()
+                }
+                .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
+
+                let modelDownloaded = FileManager.default.fileExists(
+                    atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                )
+                Button(isDownloadingLocalWhisperModel ? "Downloading…" : (modelDownloaded ? "Downloaded" : "Download model")) {
+                    downloadLocalWhisperModel()
+                }
+                .disabled(isDownloadingLocalWhisperModel || modelDownloaded)
+            }
+
+            if isInstallingLocalWhisper {
+                ProgressView()
+                Text(localWhisperSetupMessage ?? "Installing…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isDownloadingLocalWhisperModel {
+                ProgressView(value: localWhisperDownloadProgress)
+                Text("Downloading (Int(localWhisperDownloadProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let localWhisperSetupMessage {
+                Text(localWhisperSetupMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let localWhisperSetupError {
+                Label(localWhisperSetupError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    private func setupDependencyRow(title: String, detail: String, ready: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: ready ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ready ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(8)
+    }
+
     var accessibilityStep: some View {
         VStack(spacing: 20) {
             Image(systemName: "hand.raised.fill")
@@ -665,6 +758,41 @@ struct SetupView: View {
                 .padding(.top, 10)
 
             if appState.copyAgainShortcut.usesFnKey {
+                Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    var generateShortcutStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 60))
+                .foregroundStyle(.blue)
+
+            Text("Generate Shortcut")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("Choose the shortcut to hold while speaking a request for newly generated content. FreeFlow will use the active app context and paste the generated result into the focused field. You can disable this if you do not need it.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ShortcutRoleSection(
+                role: .generate,
+                selection: appState.generateShortcut,
+                validationMessage: generateShortcutValidationMessage,
+                isCapturing: $isCapturingGenerateShortcut,
+                onSelect: { binding in
+                    generateShortcutValidationMessage = appState.setShortcut(binding, for: .generate)
+                }
+            )
+                .padding(.top, 10)
+
+            if appState.generateShortcut.usesFnKey {
                 Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -1106,6 +1234,54 @@ struct SetupView: View {
                     }
                 } else {
                     keyValidationError = "Validation failed. Please check your API key and provider settings, then try again."
+                }
+            }
+        }
+    }
+
+    private func installLocalWhisper() {
+        guard !isInstallingLocalWhisper else { return }
+        isInstallingLocalWhisper = true
+        localWhisperSetupError = nil
+        Task {
+            do {
+                let executableURL = try await LocalWhisperInstaller.installWhisperCpp { message in
+                    Task { @MainActor in localWhisperSetupMessage = message }
+                }
+                await MainActor.run {
+                    appState.localWhisperExecutablePath = executableURL.path
+                    localWhisperSetupMessage = "Installed at (executableURL.path)"
+                    isInstallingLocalWhisper = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperSetupError = error.localizedDescription
+                    isInstallingLocalWhisper = false
+                }
+            }
+        }
+    }
+
+    private func downloadLocalWhisperModel() {
+        guard !isDownloadingLocalWhisperModel else { return }
+        isDownloadingLocalWhisperModel = true
+        localWhisperDownloadProgress = 0
+        localWhisperSetupError = nil
+        Task {
+            do {
+                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel { progress in
+                    Task { @MainActor in localWhisperDownloadProgress = progress }
+                }
+                await MainActor.run {
+                    appState.localWhisperModelPath = url.path
+                    localWhisperDownloadProgress = 1
+                    localWhisperSetupMessage = "Model downloaded"
+                    isDownloadingLocalWhisperModel = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperSetupError = "Could not download the model: (error.localizedDescription)"
+                    isDownloadingLocalWhisperModel = false
                 }
             }
         }

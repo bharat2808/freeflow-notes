@@ -60,6 +60,8 @@ struct ProviderSettingsFields: View {
     @State private var isDownloadingLocalWhisperModel = false
     @State private var localWhisperDownloadProgress = 0.0
     @State private var localWhisperDownloadError: String?
+    @State private var isInstallingLocalWhisper = false
+    @State private var localWhisperInstallMessage: String?
     /// Updated by the cooldown timer so warning labels clear at expiry without user interaction.
     @State private var now: Date = Date()
     /// Tracks whether the Settings window is the frontmost active window.
@@ -129,6 +131,29 @@ struct ProviderSettingsFields: View {
                 await MainActor.run {
                     localWhisperDownloadError = "Could not download the Whisper model: \(error.localizedDescription)"
                     isDownloadingLocalWhisperModel = false
+                }
+            }
+        }
+    }
+
+    private func installLocalWhisper() {
+        guard !isInstallingLocalWhisper else { return }
+        isInstallingLocalWhisper = true
+        localWhisperDownloadError = nil
+        Task {
+            do {
+                let executableURL = try await LocalWhisperInstaller.installWhisperCpp { message in
+                    Task { @MainActor in localWhisperInstallMessage = message }
+                }
+                await MainActor.run {
+                    appState.localWhisperExecutablePath = executableURL.path
+                    localWhisperInstallMessage = "Installed at \(executableURL.path)"
+                    isInstallingLocalWhisper = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperDownloadError = error.localizedDescription
+                    isInstallingLocalWhisper = false
                 }
             }
         }
@@ -354,6 +379,15 @@ struct ProviderSettingsFields: View {
 
                     HStack(spacing: 10) {
                         Button {
+                            installLocalWhisper()
+                        } label: {
+                            Label(
+                                isInstallingLocalWhisper ? "Installing…" : (LocalWhisperInstaller.installedExecutableURL == nil ? "Install whisper.cpp" : "Installed"),
+                                systemImage: LocalWhisperInstaller.installedExecutableURL == nil ? "arrow.down.circle" : "checkmark.circle.fill"
+                            )
+                        }
+                        .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
+                        Button {
                             downloadBaseLocalWhisperModel()
                         } label: {
                             Label(
@@ -369,11 +403,24 @@ struct ProviderSettingsFields: View {
                                     ) ? "checkmark.circle.fill" : "arrow.down.circle")
                             )
                         }
-                        .disabled(isDownloadingLocalWhisperModel)
+                        .disabled(
+                            isDownloadingLocalWhisperModel
+                                || FileManager.default.fileExists(
+                                    atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                                )
+                        )
                         if isDownloadingLocalWhisperModel {
                             ProgressView(value: localWhisperDownloadProgress)
                                 .frame(width: 120)
                         }
+                        if isInstallingLocalWhisper {
+                            ProgressView()
+                        }
+                    }
+                    if let localWhisperInstallMessage {
+                        Text(localWhisperInstallMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Text("Downloads the standard English model to ~/.cache/whisper (the download is about 142 MB).")
                         .font(.caption)
@@ -584,10 +631,110 @@ struct SettingsView: View {
                     RunLogView()
                 case .debug:
                     DebugSettingsView()
+                case .notesConnector:
+                    NotesConnectorSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+struct NotesConnectorSettingsView: View {
+    @State private var selectedClient = "codex"
+    @State private var commandOutput: String?
+    @State private var copied = false
+
+    private var connectorURL: URL? {
+        Bundle.main.url(forResource: "freeflow-notes-mcp", withExtension: nil)
+    }
+
+    private var connectorPath: String {
+        connectorURL?.path ?? "Connector is not present in this app bundle"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Notes Connector")
+                    .font(.title2.weight(.bold))
+                Text("Connect a local AI client to your FreeFlow notes.")
+                    .foregroundStyle(.secondary)
+
+                SettingsCard("Bundled connector", icon: "shippingbox") {
+                    Text(connectorPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    HStack {
+                        Picker("Client", selection: $selectedClient) {
+                            Text("Codex").tag("codex")
+                            Text("Claude").tag("claude")
+                            Text("Generic MCP client").tag("generic")
+                        }
+                        Button(copied ? "Copied" : "Copy configuration") {
+                            copyConfiguration()
+                        }
+                        .disabled(connectorURL == nil)
+                    }
+                    if let commandOutput {
+                        Text(commandOutput)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+                            .cornerRadius(6)
+                    }
+                }
+
+                SettingsCard("Run server", icon: "terminal") {
+                    Text("\"\(connectorPath)\" serve --stdio")
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    Text("Add this command to a client that supports local MCP servers.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(24)
+        }
+    }
+
+    private func copyConfiguration() {
+        runConnector(arguments: ["config", "--client", selectedClient])
+        guard let commandOutput else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(commandOutput, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+    }
+
+    private func runConnector(arguments: [String]) {
+        guard let connectorURL else {
+            commandOutput = "The connector executable is missing from this app bundle. Rebuild with `make ARCH=\(appArchitecture()) CODESIGN_IDENTITY=-`."
+            return
+        }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = connectorURL
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            commandOutput = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "No output"
+        } catch {
+            commandOutput = error.localizedDescription
+        }
+    }
+
+    private func appArchitecture() -> String {
+        #if arch(arm64)
+        return "arm64"
+        #else
+        return "x86_64"
+        #endif
     }
 }
 
@@ -1650,6 +1797,7 @@ struct PromptsSettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var customSystemPromptInput: String = ""
     @State private var noteSystemPromptInput: String = ""
+    @State private var generateSystemPromptInput: String = ""
     @State private var customContextPromptInput: String = ""
     @FocusState private var customSystemPromptFocused: Bool
     @FocusState private var customContextPromptFocused: Bool
@@ -1678,6 +1826,9 @@ struct PromptsSettingsView: View {
                 SettingsCard("Note-taking Prompt", icon: "note.text") {
                     notePromptSection
                 }
+                SettingsCard("Generate Prompt", icon: "sparkles") {
+                    generatePromptSection
+                }
                 SettingsCard("Instruction Guard", icon: "shield.lefthalf.filled") {
                     instructionGuardSection
                 }
@@ -1694,6 +1845,9 @@ struct PromptsSettingsView: View {
             noteSystemPromptInput = appState.noteSystemPrompt.isEmpty
                 ? MarkdownNoteStore.systemPrompt
                 : appState.noteSystemPrompt
+            generateSystemPromptInput = appState.generateSystemPrompt.isEmpty
+                ? PostProcessingService.defaultGenerateSystemPrompt
+                : appState.generateSystemPrompt
             customContextPromptInput = appState.customContextPrompt.isEmpty
                 ? AppContextService.defaultContextPrompt
                 : appState.customContextPrompt
@@ -1701,6 +1855,7 @@ struct PromptsSettingsView: View {
         .onDisappear {
             commitCustomSystemPrompt()
             commitNoteSystemPrompt()
+            commitGenerateSystemPrompt()
             commitCustomContextPrompt()
         }
     }
@@ -1737,6 +1892,38 @@ struct PromptsSettingsView: View {
         let trimmed = noteSystemPromptInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultTrimmed = MarkdownNoteStore.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.noteSystemPrompt = trimmed == defaultTrimmed ? "" : trimmed
+    }
+
+    private func commitGenerateSystemPrompt() {
+        let trimmed = generateSystemPromptInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultTrimmed = PostProcessingService.defaultGenerateSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.generateSystemPrompt = trimmed == defaultTrimmed ? "" : trimmed
+    }
+
+    private var generatePromptSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Controls how spoken requests are turned into newly generated content. Unlike Dictate, this prompt is allowed to answer or fulfill the request.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $generateSystemPromptInput)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 140, maxHeight: 240)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+
+            HStack {
+                Label(appState.generateSystemPrompt.isEmpty ? "Using default" : "Using custom prompt",
+                      systemImage: appState.generateSystemPrompt.isEmpty ? "checkmark.circle" : "pencil")
+                    .font(.caption)
+                    .foregroundStyle(appState.generateSystemPrompt.isEmpty ? Color.secondary : Color.blue)
+                Spacer()
+                Button("Reset to Default") {
+                    generateSystemPromptInput = PostProcessingService.defaultGenerateSystemPrompt
+                    appState.generateSystemPrompt = ""
+                }
+                .font(.caption)
+            }
+        }
     }
 
     private var notePromptSection: some View {

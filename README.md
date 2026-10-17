@@ -92,6 +92,11 @@ FreeFlow can use OpenAI-compatible local or self-hosted providers instead of Gro
 
 Local models are often slower than hosted providers, especially on cold start, long recordings, or busy hardware.
 
+For Local Whisper, the app keeps a model loaded in a separate helper process and reuses it for live previews and final transcriptions across recordings. The first request pays the startup cost; changing the model or language reloads it, and quitting FreeFlow releases it. A helper failure does not terminate FreeFlow.
+
+The persistent helper currently supports the Whisper 1.8.6 native API. Other library versions or unsupported installations use the configured CLI for compatibility, which reloads the model per request. Build-time headers are pinned in `Vendor/whisper-1.8.6`; runtime libraries still come from your local Whisper installation.
+
+
 <details>
   <summary>Configure longer timeouts for local models</summary>
 
@@ -118,6 +123,15 @@ defaults delete com.bharat2808.freeflownotes context_request_timeout_seconds
 ```
 
 </details>
+
+## Agent Notes Connector
+
+FreeFlow includes an optional local MCP connector for agents that support stdio
+servers. Build it with `make connector-build`, then print a client configuration
+with `build/freeflow-notes-mcp config --client codex` (or `claude`). Start the
+server with `build/freeflow-notes-mcp serve --stdio`. It exposes the local notes
+library through the `usage_guidelines`, `notes`, and `search_notes` tools; access
+is restricted to the FreeFlow notes directory.
 
 ## License
 
